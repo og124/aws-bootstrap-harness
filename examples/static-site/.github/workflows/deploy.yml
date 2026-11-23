@@ -1,0 +1,60 @@
+# main: apply, sync site/ to the bucket, invalidate the CDN. Same variables as
+# plan.yml. Never pushes commits, so it can't trigger itself.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "0"
+  TF_VAR_domain_name: ${{ vars.TF_VAR_DOMAIN_NAME }}
+  TF_VAR_zone_name: ${{ vars.TF_VAR_ZONE_NAME }}
+  TF_VAR_github_repository: ${{ github.repository }}
+  TF_VAR_oidc_provider_arn: ${{ vars.TF_VAR_OIDC_PROVIDER_ARN }}
+  TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+  TF_VAR_alert_email: ${{ vars.TF_VAR_ALERT_EMAIL }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="region=${{ vars.AWS_REGION }}"
+      - run: terraform apply -auto-approve -no-color
+
+      - name: Sync the site
+        run: |
+          bucket=$(terraform output -raw bucket_name)
+          # HTML revalidates on every load; everything else may cache briefly.
+          # Not fingerprinted, so keep the asset TTL short or returning
+          # visitors can get new HTML with old CSS/JS.
+          aws s3 sync site/ "s3://$bucket" --delete --exclude '*.html' \
+            --cache-control 'public, max-age=300'
+          aws s3 sync site/ "s3://$bucket" --delete --exclude '*' --include '*.html' \
+            --content-type 'text/html; charset=utf-8' \
+            --cache-control 'public, max-age=0, must-revalidate'
+
+      - name: Invalidate the CDN
+        run: |
+          id=$(terraform output -raw distribution_id)
+          inv=$(aws cloudfront create-invalidation --distribution-id "$id" --paths '/*' --query Invalidation.Id --output text)
+          aws cloudfront wait invalidation-completed --distribution-id "$id" --id "$inv"

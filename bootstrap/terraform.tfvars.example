@@ -1,0 +1,3 @@
+# cp terraform.tfvars.example terraform.tfvars   (gitignored)
+state_bucket_name = "example-tf-state"
+# create_oidc_provider = false   # if this account already has one
