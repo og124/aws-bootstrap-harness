@@ -27,34 +27,6 @@ reuses:
                         budget 100% ────────┴─► SNS ─► breaker Lambda ─► distribution disabled
 ```
 
-## Design choices
-
-- **OIDC, not access keys.** Workflows exchange a short-lived GitHub token for
-  AWS credentials. Each role's trust policy is pinned to one repository and,
-  for apply, one branch — a fork or a feature branch can't deploy.
-- **State access is per project.** A project's roles can read and write their
-  own state key and lockfile, not anyone else's.
-- **Scope the deploy role.** The example limits S3, Lambda, IAM, SNS, logs and
-  alarms to resources named after the project. CloudFront, ACM, Route 53 and
-  Budgets don't support much resource-level scoping, so those stay broad —
-  which is a reason to pin your workflow actions to commit SHAs, as the
-  examples do: a compromised action release runs with whatever the role can do.
-- **The bucket is never public.** Only the distribution can read it, signed
-  with SigV4. Content is synced by the workflow rather than managed as
-  Terraform objects, so editing a page never churns the plan.
-- **AWS has no hard billing cap, so build one.** For a public site the
-  realistic bill is request volume. The breaker disables the distribution
-  when requests or bytes per hour cross a threshold, or the monthly budget is
-  exceeded. The distribution ignores changes to `enabled`, so the next apply
-  can't quietly undo a trip; re-enabling is a deliberate Lambda invoke.
-- **Budgets that can actually fire.** Credits are excluded (a budget that
-  subtracts them can read $0.00 forever), and a project budget filters on its
-  `project` tag — which only works once that tag key is activated as a cost
-  allocation tag in Billing.
-- **An alert nobody receives is no alert.** AWS emails a confirmation link for
-  each SNS email subscription. Until it's clicked, nothing is delivered, and
-  the subscription expires after three days.
-
 ## First-time setup
 
 1. **Bootstrap the account** (once, admin credentials, local state):
